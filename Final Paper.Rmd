@@ -1,0 +1,720 @@
+---
+title: "Final Paper"
+author: "STOR 320.02 Group 8"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: html_document
+---
+
+```{r setup,include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(ggplot2)
+library(gganimate)
+library(gifski)
+library(png)
+library(reprex)
+library(dplyr)
+library(readr)
+library(plyr)
+library(tidyr)
+library(ggplot2)
+library(data.table)
+library(lvplot)
+library(stringr)
+library(kableExtra)
+library(modelr)
+library(broom)
+library(purrr)
+library(regclass)
+library(Metrics)
+library(bestglm)
+library(grid)
+library(readxl)
+library(transformr)
+```
+
+```{r}
+set.seed(320)
+D <- read.csv("data.csv")
+D$release_date <- as.Date(D$release_date)
+D$weekday <- weekdays(D$release_date)
+D.keep <- filter(D, budget>100 & revenue>100)
+D.keep$weekday <- factor(D.keep$weekday, levels=c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))
+D.keep <- mutate(D.keep, profit = revenue-budget)
+
+D1 = D.keep %>%
+mutate(
+budget_in_million = budget/10^6,
+revenue_in_million = revenue/10^6,
+
+# Variable to be predicted
+profit_in_million = (revenue_in_million - budget_in_million),
+
+# Make variables into lists
+keywords = str_split(str_sub(gsub("'", "", D.keep$keywords), 2, -2), ", "),
+genres = str_split(str_sub(gsub("'", "", D.keep$genres), 2, -2), ", "),
+production_companies = str_split(str_sub(gsub("'", "", D.keep$production_companies), 2, -2), ", "),
+production_countries = str_split(str_sub(gsub("'", "", D.keep$production_countries), 2, -2), ", "),
+spoken_languages = str_split(str_sub(gsub("'", "", D.keep$spoken_languages), 2, -2), ", "),
+
+# Some new variables to use in model
+in_collection = ifelse(belongs_to_collection!="", TRUE, FALSE),
+english = ifelse(original_language == "en", TRUE, FALSE),
+num_languages_spoken = lengths(spoken_languages),
+num_genres = lengths(genres),
+num_keywords = ifelse(keywords == "", 0,lengths(keywords)),
+age_days = as.numeric(Sys.Date() - as.Date(release_date)), # This should be changed from Sys.Date() to whatever the release date of the dataset was.
+num_companies = lengths(production_companies),
+num_countries = lengths(production_countries),
+
+title_consistent = ifelse(original_title == title, TRUE, FALSE)
+) %>%
+select(
+
+-X, -id, -profit, -budget, -revenue
+)
+```
+
+```{r, eval=FALSE}
+D2 <- D1 %>% filter(profit_in_million>=1)
+D3 <- D2 %>% filter(in_collection==TRUE & vote_count>=100)
+D4 <-  D3 %>% filter(english==TRUE)
+
+# Model 1:
+lm1 = lm(profit_in_million~english+runtime+num_languages_spoken+num_genres+num_keywords+num_countries+num_companies, D2)
+cv <- crossv_kfold(D2, k=20)
+models <- map(cv$train, ~lm1)
+mean(map2_dbl(models, cv$test, modelr::mae)); mean(map2_dbl(models, cv$test, modelr::rmse)); bias(D2$profit_in_million, predict(lm1))
+mean(D2$profit_in_million)
+
+# Model 2:
+lm2 = lm(profit_in_million~english+num_languages_spoken+num_genres+num_keywords+num_countries+num_companies+runtime*year+in_collection+popularity, D2)
+models <- map(cv$train, ~lm2)
+mean(map2_dbl(models, cv$test, modelr::mae)); mean(map2_dbl(models, cv$test, modelr::rmse)); bias(D2$profit_in_million, predict(lm2))
+mean(D2$profit_in_million)
+
+# Model 3:
+lm3 = lm(profit_in_million~num_languages_spoken+num_genres+num_keywords+num_countries+num_companies+runtime*year+popularity+vote_average*num_keywords+runtime*english+english*year, D3)
+cv <- crossv_kfold(D3, k=10)
+models <- map(cv$train, ~lm3)
+mean(map2_dbl(models, cv$test, modelr::mae)); mean(map2_dbl(models, cv$test, modelr::rmse)); bias(D3$profit_in_million, predict(lm3))
+mean(D3$profit_in_million)
+
+# Model 4:
+lm4 = lm(profit_in_million~num_genres+num_keywords+num_countries+num_companies+runtime*year+popularity*num_countries+popularity*num_companies+vote_average*num_keywords, D4)
+cv <- crossv_kfold(D4, k=10)
+models <- map(cv$train, ~lm4)
+mean(map2_dbl(models, cv$test, modelr::mae)); mean(map2_dbl(models, cv$test, modelr::rmse)); bias(D4$profit_in_million, predict(lm4))
+mean(D4$profit_in_million)
+
+D5 <- D4 %>% filter(profit_in_million>=100)
+mod = lm(profit_in_million~num_genres+num_keywords+num_countries+num_companies+runtime*year+popularity*num_countries+popularity*num_companies+vote_average*num_keywords, D5)
+cv <- crossv_kfold(D5, k=10)
+models <- map(cv$train, ~mod)
+mean(map2_dbl(models, cv$test, modelr::mae)); mean(map2_dbl(models, cv$test, modelr::rmse)); bias(D5$profit_in_million, predict(mod))
+mean(D5$profit_in_million)
+```
+
+```{r,echo=FALSE}
+month_list = c("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+
+for (i in 1:length(D1$month)) {
+    for (j in 1:12) {
+      if (D1$month[i] == j) {
+        D1$month[i] <- month_list[j]
+    }
+  }
+}
+```
+
+
+# INTRODUCTION
+
+```{r,echo=FALSE,out.width="33%",out.height="20%",fig.cap="Top 3 profitable movies from the dataset",fig.show='hold',fig.align='center'}
+knitr::include_graphics(c("Star Wars - The Force Awakens.jpg","Furious 7.jpg", "Harry Potter and the Deathly Hallows - Part 2.jpeg"))
+``` 
+
+Whether it be Marvel’s ascension into the spotlight in the 2010s, the continued longevity of the Star Wars franchise, or stand-alone sensations like Avatar, the film industry has soared since the turn of the century and become one of the most profitable industries in entertainment. The success of movie studios is evident, but what are the factors that have created these continued “box office hits” that have turned viewers into loyal fandoms for years to come? The profit change of James Bond Collection over the years (as shown in the figure below) somewhat reflects the history of the film industry that it becomes more and more profitable, and watching film becomes a fashion and a part of people's daily life.
+
+```{r,fig.width=12,fig.height=8,fig.cap="The profit change of 'James Bond Collection' over seasons/time",fig.align='center'}
+IC <- D1 %>% filter(in_collection==TRUE) %>%
+  select(-c(original_title, movieId, average_rating, keywords, genres, production_companies, production_countries, spoken_languages, day, month, weekday, original_language, title_consistent, in_collection)) %>%
+  arrange(belongs_to_collection, release_date) %>%
+  select(title, belongs_to_collection, profit_in_million, release_date, everything()) %>%
+  group_by(belongs_to_collection) %>%
+  dplyr::mutate(count = n()) %>%
+  filter(count>1) %>%
+  ungroup()
+
+FC <- IC %>% group_by(belongs_to_collection) %>% select(belongs_to_collection, profit_in_million, year, count) %>% distinct() %>% ungroup()
+
+FC %>% filter(belongs_to_collection=="James Bond Collection") %>%
+  ggplot(., aes(x=year, y=profit_in_million)) + geom_point(size=2, aes(group = seq_along(year))) + geom_line(size=1) +
+  theme_minimal() +
+  transition_reveal(year) +
+  view_follow(fixed_x = TRUE, fixed_y = TRUE) +
+  labs(x="Year", y="Profit in million", title="Year: {(frame_along)}")
+```
+
+Now keeping the question above in mind, consider a scenario where we are on an experienced team of film studio investors trying to decide on the next profitable film. In a world full of up-and-coming filmmakers, the market to receive investment and appeal to financiers is competitive. Many notable film studios of today’s world, such as Universal Pictures, Warner Bro’s, and Walt Disney Pictures have mastered the process of pumping out profitable blockbuster hits every year but is there a formula that they use to replicate this success?
+
+The Exploratory Data Analysis helped shed some light on this guiding question as it allowed us to dive into a dataset with over 45,000 different movies and 26 million ratings from 270,000+ users. We tested many different variables that could have a possible impact on the revenue of a movie. Understanding the factors that truly push a movie to success is key in choosing movies that are more likely to blow up at the box office.
+
+```{r}
+D %>%
+  filter(., revenue>=100) %>% # Filter abnormal revenue (NA and outliers) out
+  group_by(original_title) %>%
+  select(revenue, belongs_to_collection, runtime, vote_average, vote_count, genres, production_companies, spoken_languages) %>%
+  distinct() %>%
+  arrange(desc(revenue)) %>%
+  head(10) %>%
+  kable(format="html", booktabs=T, table.attr="style='width:100%;'", caption = "10 Highest Earning Movies included in dataset") %>% 
+  kable_styling(full_width=T, position="center") %>%
+  column_spec(3, width="10em")
+```
+
+A core part of generating revenue for a film is connecting a target audience to an idea and keeping them engaged with it going into the future. Collections of movie series seem to demonstrate this idea the strongest. When doing a brief profile of the highest earning movies of all time, we noticed that 8 out of 10 of the returned selections belonged to a collection. Marvel’s success in the superhero industry of cinema is evident of this trend as they have a wide universe of heroes that appeal to many different groups of people - all of which create high-grossing films and series.
+
+After choosing the movie, producing it, and then finally releasing it, the studio assesses the success of their new film and has to make a huge decision: should the studio make a sequel? More specifically, given the success of a first movie, should we expect the sequel or future installments of the series to be increasingly profitable? Movies are not cheap and can be huge risks, so the studio wants to ensure they are placing an investment in a worthy cause. Our team will use data and analysis in an attempt to choose an initial movie and decide on a sequel after its first movie’s release.
+
+# DATA
+
+The dataset we chose was compiled on Kaggle by Rounak Banik, a Data Science Fellow at Mckinsey & Company and Electronics and Communication Engineering graduate from IIT Roorkee. He included information about roughly 45,000 movies released by July 2017 that were available on MovieLens, a movie recommendation service run by GroupLens Research at the University of Minnesota. The data was then supplemented with data collected from TMDB, which provides an API to access a variety of metadata about each movie. 
+
+After cleaning the original dataset, we created a condensed version with 18 variables. The following paragraph details what each variable measured in the context of this dataset:
+
+```{r}
+Variables_proj <- read_excel("Variables_proj.xlsx")
+```
+
+```{r}
+Variables_proj %>%
+  kbl() %>%
+  kable_styling()
+```
+
+The Exploratory Data Analysis portion of the project allowed us to lay out 12 different questions to examine these variables’ relationships with each other. For instance, we identified the highest-earning movie collections, we found that higher budget tends to lead to higher revenue, there is little impact between title length and revenue, movies make more money as the years go forward, movies are most profitable when released in June, and that certain keywords can lead to higher ratings on average. Among these relationships between variables, we also found some abnormalities in the data, specifically that there were some movies that seemed to have missing values for budget and revenue, which are needed to calculate the movie’s profit. For example, the dataset shows that the sci-fi film “What Happened to Monday” has 0 revenue and budget:
+
+```{r}
+D %>%
+  filter(., title=="What Happened to Monday") %>%
+  select(c(title, budget, revenue)) %>%
+  kable(format="html", booktabs=T, table.attr="style='width:100%;'") %>%
+  kable_styling(full_width=T, position="center") %>%
+  column_spec(3, width="20em")
+```
+
+However, [Wikipedia](https://en.wikipedia.org/wiki/What_Happened_to_Monday) shows that the movie earned `$28 million` from a `$20 million budget`. Observations such as this one had to be removed from the dataset, which left us with a total of 5,319 observations.
+ 
+The figure we have chosen to include demonstrates the distributions of important variables that were used in the project.
+
+```{r}
+D.changed = D.keep %>%
+  mutate(
+    # Log variables that are too big
+    log_revenue = log(revenue),
+    log_budget = log(budget),
+    
+    # Variable to be predicted
+    profit = (revenue - budget) / 1000000, # (millions of dollars) 
+    
+    # Make variables into lists
+    keywords = str_split(str_sub(gsub("'", "", D.keep$keywords), 2, -2), ", "),
+    genres = str_split(str_sub(gsub("'", "", D.keep$genres), 2, -2), ", "),
+    production_companies = str_split(str_sub(gsub("'", "", D.keep$production_companies), 2, -2), ", "),
+    production_countries = str_split(str_sub(gsub("'", "", D.keep$production_countries), 2, -2), ", "),
+    spoken_languages = str_split(str_sub(gsub("'", "", D.keep$spoken_languages), 2, -2), ", "),
+    
+    #month = as.factor(month), # Not sure if we should keep this
+    
+    # Some new variables to use in model
+    in_collection = belongs_to_collection!="",
+    english = original_language == "en",
+    num_languages_spoken = lengths(spoken_languages),
+    num_genres = lengths(genres),
+    num_keywords = ifelse(keywords == "", 0,lengths(keywords)),
+    age_days = as.numeric(as.Date("2017-07-30") - as.Date(release_date)),
+    num_companies = lengths(production_companies),
+    num_countries = lengths(production_countries),
+    title_length = nchar(title)
+    )  %>%
+  select(
+    profit, #The value to be predicted
+    
+    # Only include variables to be used for the model
+    log_budget, log_revenue, english, runtime, in_collection, num_languages_spoken, num_genres, num_keywords, age_days, num_companies, num_countries, title_length
+  ) %>%
+  mutate(Split = sample(x=c("Train", "Test"), size=nrow(D.keep), replace=T, prob=c(0.85, 0.15)))
+# actual code for figures
+par(mfrow=c(2,3))
+hist(D.changed$log_budget,col = '#00AFBB',breaks=40,main='Movie Log_Budget Distribution',xlab = 'Budget (in millions of $)')
+hist(D.changed$log_revenue,col = '#00AFBB',breaks=80,main='Movie Log_Revenue Distribution',xlab = 'Revenue (in millions of $)')
+hist(D.changed$profit,col = '#00AFBB',breaks=40,main='Movie Profit Distribution',xlab = 'Profit (in millions of $)',xlim=c(0,1000))
+hist(D.keep$runtime,col = '#00AFBB',breaks=40,main='Movie Runtime Distribution',xlab = 'Runtime (in minutes)',xlim=c(0,250))
+hist(D.keep$vote_average,col = '#00AFBB',breaks=40,main= 'Movie Rating Distribution',xlab = 'Rating (out of 10)',xlim=c(0,10))
+hist(D.keep$year,col = '#00AFBB',breaks=40,main='Movie Year Released Distribution',xlab = 'Year')
+```
+
+# RESULTS
+
+### Result 1:
+
+The model is difficult to compose with this data due to the amount of variables present. Due to this problem, we cannot find which model is the best manually, so we used the `bestglm` function to get the best models over the data with Information Criteria AIC. AIC (Akaike Information Criterion) provides measures of model performance that account for model complexity, and the smaller the AIC the better. During the process of finding the best model, we found that it is difficult to create a satisfying model over the entire data set with relatively small MAE or AIC. This is likely due to the fact that profitable movies are variable in many aspects. However, after selecting a subset of the data of movies that were profitable over $100M, we found that the accuracy of the models increases according to the AIC criterion.
+
+Moreover, when we further take into account all English-original-spoken and in-collection movies in the data set, the models become more accurate. The following are the three models that we conclude from these data sets: (All the models below have significant p-values).
+
+**Best three models concluded over the 'ENTIRE' dataset:**
+
+- Best Model 1: profit_in_million = popularity + runtime + vote_count + in_collection + num_genres + num_keywords + num_companies + num_countries
+
+- Best Model 2: profit_in_million = popularity + runtime + vote_count + in_collection + num_genres + num_keywords + num_countries
+
+- Best Model 3: profit_in_million = popularity + english + vote_count + in_collection + num_genres + num_keywords + num_companies + num_countries
+
+**Best three models concluded over the 'PROFIT > 100M' dataset:**
+
+- Best Model 1: profit_in_million = popularity + runtime + vote_count + in_collection + num_genres + num_countries
+
+- Best Model 2: profit_in_million = popularity + runtime + vote_count + in_collection + num_genres + num_companies + num_countries
+
+- Best Model 3: profit_in_million = popularity + vote_count + in_collection + num_genres + num_countries
+
+**Best three models concluded over the 'PROFIT > 100M & English-original-spoken and In-collection' dataset:**
+
+- Best Model 1: profit_in_million = popularity + runtime + vote_count + num_genres + num_countries
+
+- Best Model 2: profit_in_million = popularity + runtime + vote_average + vote_count + num_genres + num_countries
+
+- Best Model 3: profit_in_million = popularity + runtime + vote_count + num_genres + num_companies + num_countries
+
+```{r}
+D6 <- D1 %>%
+  select(-c(original_title, release_date, title, keywords, belongs_to_collection, genres, production_companies, production_countries, spoken_languages, day))
+
+cols_factor = c("original_language", "month", "weekday", "in_collection", "english", "title_consistent")
+cols_numeric = c("popularity", "runtime", "vote_average", "vote_count", "movieId", "average_rating", "year", "budget_in_million", "revenue_in_million", "profit_in_million", "num_languages_spoken", "num_genres", "num_keywords", "age_days", "num_companies", "num_countries")
+
+D6[cols_factor] <- lapply(D6[cols_factor], as.factor)
+D6[cols_numeric] <- lapply(D6[cols_numeric], as.numeric)
+
+D6 <- D6 %>% select(-c(budget_in_million, revenue_in_million, year, weekday, movieId, average_rating, original_language, month)) %>%
+  filter(num_keywords>0) # To run the bestglm (which has log stuff) so we need to exclude zero values to avoid log(0)
+
+D7 <- D6 %>% filter(profit_in_million>=100)
+
+D8 <- D7 %>% filter(in_collection==TRUE & english==TRUE) %>% select(-c(in_collection, english, title_consistent))
+
+# ----------
+
+X <- select(D6, -profit_in_million)
+profit_in_million <- D6$profit_in_million
+Xy = data.frame(X, profit_in_million)
+bglm.AIC = bestglm(Xy, IC = "AIC", TopModels = 3, method = "exhaustive")
+
+model1 <- lm(profit_in_million ~ popularity + runtime + vote_count + in_collection + num_genres + num_keywords + num_companies + num_countries, D6)
+cv1 <- crossv_kfold(D6, k=10)
+models1 <- map(cv1$train, ~model1)
+a1 <- mean(map2_dbl(models1, cv1$test, modelr::mae))
+b1 <- mean(map2_dbl(models1, cv1$test, modelr::rmse))
+c1 <- bias(D6$profit_in_million, predict(model1))
+d1 <- mean(D6$profit_in_million)
+
+model11 <- lm(profit_in_million ~ popularity + runtime + vote_count + in_collection + num_genres + num_keywords + num_countries, D6)
+cv11 <- crossv_kfold(D6, k=10)
+models11 <- map(cv11$train, ~model11)
+a11 <- mean(map2_dbl(models11, cv11$test, modelr::mae))
+b11 <- mean(map2_dbl(models11, cv11$test, modelr::rmse))
+c11 <- bias(D6$profit_in_million, predict(model11))
+d11 <- mean(D6$profit_in_million)
+
+model111 <- lm(profit_in_million ~ popularity + english + vote_count + in_collection + num_genres + num_keywords + num_companies + num_countries, D6)
+cv111 <- crossv_kfold(D6, k=10)
+models111 <- map(cv111$train, ~model111)
+a111 <- mean(map2_dbl(models111, cv111$test, modelr::mae))
+b111 <- mean(map2_dbl(models111, cv111$test, modelr::rmse))
+c111 <- bias(D6$profit_in_million, predict(model111))
+d111 <- mean(D6$profit_in_million)
+
+Models <- c("Best Model 1 with eight predictors", "Best Model 2 with seven predictors", "Best Model 3 with eight predictors")
+MAE <- round(c(a1, a11, a111), 4)
+RMSE <- round(c(b1, b11, b111), 4)
+BIAS <- signif(c(c1, c11, c111), 4)
+`Average Profit in million` <- round(c(d1, d11, d111), 4)
+`Relative Error = Absolute Value of MAE/Average Profit in million` <- abs(round(c(a1/d1, a11/d11, a111/d111), 4))
+`AIC Criterion` <- round(c(bglm.AIC$BestModels$Criterion), 4)
+
+matrix.D6 <- cbind(Models, MAE, RMSE, BIAS, `Average Profit in million`, `Relative Error = Absolute Value of MAE/Average Profit in million`, `AIC Criterion`)
+matrix.D6 %>% kbl(booktabs=T, caption = "<center><strong>Models and Errors over the 'ENTIRE' data</strong></center>", escape = FALSE, format = "html") %>% kable_styling() %>%
+  row_spec(3, bold=T, color="white", background="green") %>%
+  row_spec(0, background="#D3D3D3") %>%
+  column_spec(6, bold=T, color="red") %>%
+  add_footnote(c("Best Model 1: profit_in_million = popularity + runtime + vote_count + in_collection + num_genres + num_keywords + num_companies + num_countries", "Best Model 2: profit_in_million = popularity + runtime + vote_count + in_collection + num_genres + num_keywords + num_countries", "Best Model 3: <span style='color: green;'>profit_in_million = popularity + english + vote_count + in_collection + num_genres + num_keywords + num_companies + num_countries</span>"), notation="number", escape=F)
+
+# ----------
+
+X <- select(D7, -profit_in_million)
+profit_in_million <- D7$profit_in_million
+Xy = data.frame(X, profit_in_million)
+bglm.AIC = bestglm(Xy, IC = "AIC", TopModels = 3, method = "exhaustive")
+
+model2 <- lm(profit_in_million ~ popularity + runtime + vote_count + in_collection + num_genres + num_countries, D7)
+cv2 <- crossv_kfold(D7, k=10)
+models2 <- map(cv2$train, ~model2)
+a2 <- mean(map2_dbl(models2, cv2$test, modelr::mae))
+b2 <- mean(map2_dbl(models2, cv2$test, modelr::rmse))
+c2 <- bias(D7$profit_in_million, predict(model2))
+d2 <- mean(D7$profit_in_million)
+
+model22 <- lm(profit_in_million ~ popularity + runtime + vote_count + in_collection + num_genres + num_companies + num_countries, D7)
+cv22 <- crossv_kfold(D7, k=10)
+models22 <- map(cv22$train, ~model22)
+a22 <- mean(map2_dbl(models22, cv22$test, modelr::mae))
+b22 <- mean(map2_dbl(models22, cv22$test, modelr::rmse))
+c22 <- bias(D7$profit_in_million, predict(model22))
+d22 <- mean(D7$profit_in_million)
+
+model222 <- lm(profit_in_million ~ popularity + vote_count + in_collection + num_genres + num_countries, D7)
+cv222 <- crossv_kfold(D7, k=10)
+models222 <- map(cv222$train, ~model222)
+a222 <- mean(map2_dbl(models222, cv222$test, modelr::mae))
+b222 <- mean(map2_dbl(models222, cv222$test, modelr::rmse))
+c222 <- bias(D7$profit_in_million, predict(model222))
+d222 <- mean(D7$profit_in_million)
+
+Models <- c("Best Model 1 with six predictors", "Best Model 2 with seven predictors", "Best Model 3 with five predictors")
+MAE <- round(c(a2, a22, a222), 4)
+RMSE <- round(c(b2, b22, b222), 4)
+BIAS <- signif(c(c2, c22, c222), 4)
+`Average Profit in million` <- round(c(d2, d22, d222), 4)
+`Relative Error = Absolute Value of MAE/Average Profit in million` <- abs(round(c(a2/d2, a22/d22, a222/d222), 4))
+`AIC Criterion` <- round(c(bglm.AIC$BestModels$Criterion), 4)
+
+matrix.D7 <- cbind(Models, MAE, RMSE, BIAS, `Average Profit in million`, `Relative Error = Absolute Value of MAE/Average Profit in million`, `AIC Criterion`)
+matrix.D7 %>% kbl(booktabs=T, caption = "<center><strong>Models and Errors over the 'PROFITABLE PART' data</strong></center>", escape = FALSE, format = "html") %>% kable_styling() %>%
+  row_spec(2, bold=T, color="white", background="green") %>%
+  row_spec(0, background="#D3D3D3") %>%
+  column_spec(6, bold=T) %>%
+  add_footnote(c("Best Model 1: profit_in_million = popularity + runtime + vote_count + in_collection + num_genres + num_countries", "Best Model 2: <span style='color: green;'>profit_in_million = popularity + runtime + vote_count + in_collection + num_genres + num_companies + num_countries</span>", "Best Model 3: profit_in_million = popularity + vote_count + in_collection + num_genres + num_countries"), notation="number", escape=F)
+
+# ----------
+
+X <- select(D8, -profit_in_million)
+profit_in_million <- D8$profit_in_million
+Xy = data.frame(X, profit_in_million)
+bglm.AIC = bestglm(Xy, IC = "AIC", TopModels = 3, method = "exhaustive")
+
+model3 <- lm(profit_in_million ~ popularity + runtime + vote_count + num_genres + num_countries, D8)
+cv3 <- crossv_kfold(D8, k=10)
+models3 <- map(cv3$train, ~model3)
+a3 <- mean(map2_dbl(models3, cv3$test, modelr::mae))
+b3 <- mean(map2_dbl(models3, cv3$test, modelr::rmse))
+c3 <- bias(D8$profit_in_million, predict(model3))
+d3 <- mean(D8$profit_in_million)
+
+model33 <- lm(profit_in_million ~ popularity + runtime + vote_average + vote_count + num_genres + num_countries, D8)
+cv33 <- crossv_kfold(D8, k=10)
+models33 <- map(cv33$train, ~model33)
+a33 <- mean(map2_dbl(models33, cv33$test, modelr::mae))
+b33 <- mean(map2_dbl(models33, cv33$test, modelr::rmse))
+c33 <- bias(D8$profit_in_million, predict(model33))
+d33 <- mean(D8$profit_in_million)
+
+model333 <- lm(profit_in_million ~ popularity + runtime + vote_count + num_genres + num_companies + num_countries, D8)
+cv333 <- crossv_kfold(D8, k=10)
+models333 <- map(cv333$train, ~model333)
+a333 <- mean(map2_dbl(models333, cv333$test, modelr::mae))
+b333 <- mean(map2_dbl(models333, cv333$test, modelr::rmse))
+c333 <- bias(D8$profit_in_million, predict(model333))
+d333 <- mean(D8$profit_in_million)
+
+Models <- c("Best Model 1 with five predictors", "Best Model 2 with six predictors", "Best Model 3 with six predictors")
+MAE <- round(c(a3, a33, a333), 4)
+RMSE <- round(c(b3, b33, b333), 4)
+BIAS <- signif(c(c3, c33, c333), 4)
+`Average Profit in million` <- round(c(d3, d33, d333), 4)
+`Relative Error = Absolute Value of MAE/Average Profit in million` <- abs(round(c(a3/d3, a33/d33, a333/d333), 4))
+`AIC Criterion` <- round(c(bglm.AIC$BestModels$Criterion), 4)
+
+matrix.D8 <- cbind(Models, MAE, RMSE, BIAS, `Average Profit in million`, `Relative Error = Absolute Value of MAE/Average Profit in million`, `AIC Criterion`)
+matrix.D8 %>% kbl(booktabs=T, caption = "<center><strong>Models and Errors over the 'PROFITABLE English-original-spoken and In-collection PART' data</strong></center>", escape = FALSE, format = "html") %>% kable_styling() %>%
+  row_spec(3, bold=T, color="white", background="green") %>%
+  row_spec(0, background="#D3D3D3") %>%
+  column_spec(6, bold=T) %>%
+  add_footnote(c("Best Model 1: profit_in_million = popularity + runtime + vote_count + num_genres + num_countries", "Best Model 2: profit_in_million = popularity + runtime + vote_average + vote_count + num_genres + num_countries", "Best Model 3: <span style='color: green;'>profit_in_million = popularity + runtime + vote_count + num_genres + num_companies + num_countries</span>"), notation="number", escape=F)
+```
+
+According to the three tables above, we can see that the AIC criterion goes from extremely large (around 45051) to "somewhat" small (around 4981), which indicates that when the data used to generalize the models narrows down, the corresponding models become more accurate. It also indicates that our guess of profitable movies not being various in many aspects. According to the three tables produced, AIC within each table is nearly the same, which indicates that the best models from `bestglm` function have nearly the same accuracy when comparing AIC. Therefore, we need to create our own criteria to decide which is the best model.
+
+To make our own criteria we use 10-fold cross validation to get the MAE for the best models we have, and we also use the `bias` function to get the prediction bias. Only analyzing MAE is not appropriate since our average __y__ (response variable - profit_in_million) may be either too large or small, so we create our own criteria - comparing the relative error between models, where $\text{Relative Error} = \mathopen|{\frac{\text{MAE}}{\text{Average Profit in million of dollars}}}\mathclose|$. 
+
+As shown in the three tables above, the relative_error decreases as the data gets narrowed down, especially from the entire data set to just the 'profit > 100M' data set. This indicates that our defined criteria in our data set is helpful. We added green to the background of the best model with lowest relative_error in each table, thus leaving us with the three best models from each data set.
+
+Now, we want to see if our model predicts the majority of the data correctly. We decided to use the third data set to create the prediction result graph since it has the lowest error/relative_error. We assume:
+
+- **Good Prediction:** 0 ≤ relative_error ≤ 0.3 (relative_error=0 is a perfect prediction)
+
+- **Somewhat Good Prediction:** 0.3 < relative_error ≤ 0.7
+
+- **Somewhat Bad Prediction:** 0.7 < relative_error ≤ 1.2
+
+- **Bad Prediction:** relative_error > 1.2
+
+We will also split the third data set into TRAIN (approximately 80% of the original data set) and TEST (approximately 20% of the original data set) data sets. We fit the model formula onto the TRAIN data set, giving us the coefficients for the model. Then, we add this completed model to the TEST data set and create the prediction result plot to see if our model is accurate.
+
+```{r, fig.width=12, fig.height=8}
+Dtry <- D8 %>%
+  gather_predictions(model3, model33, model333) %>%
+  mutate(resid = profit_in_million - pred,
+         relative_error = abs(resid/profit_in_million))
+
+for (i in 1:nrow(Dtry)) {
+  if (Dtry$relative_error[i]<=0.3) {
+    Dtry$group[i] <- "Good Prediction"
+  } else if (Dtry$relative_error[i]>0.3 & Dtry$relative_error[i]<=0.7) {
+    Dtry$group[i] <- "Somewhat Good Prediction"
+  } else if (Dtry$relative_error[i]>0.7 & Dtry$relative_error[i]<=1.2) {
+    Dtry$group[i] <- "Somewhat Bad Prediction"
+  } else {
+    Dtry$group[i] <- "Bad Prediction"
+  }
+}
+
+Dtry$group <- factor(Dtry$group, levels=c("Bad Prediction", "Somewhat Bad Prediction", "Somewhat Good Prediction", "Good Prediction"))
+
+Dtry$model[Dtry$model == "model3"] <- "Best Model 1 with five predictors"
+Dtry$model[Dtry$model == "model33"] <- "Best Model 2 with six predictors"
+Dtry$model[Dtry$model == "model333"] <- "Best Model 3 with six predictors"
+
+Dtry %>%
+  ggplot(aes(group, model, color=group)) +
+  geom_jitter(aes(size=relative_error)) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+        "Good Prediction" = "deepskyblue4",
+        "Somewhat Good Prediction" = "deepskyblue3",
+        "Somewhat Bad Prediction" = "darkseagreen3",
+        "Bad Prediction" = "darkseagreen4")) +
+  labs(x="Prediction Level", y="Model", color="Prediction Level", size="Relative Error", title="Prediction Result of Three Best Logistic Model") +
+  theme(plot.title=element_text(hjust=0.5))
+
+Dnew <- Dtry %>% mutate(Split = sample(x=c("Train", "Test"), size=nrow(D8), replace=T, prob=c(0.8, 0.2)))
+TRAIN = filter(Dnew, Split=="Train") %>% select(-Split)
+TEST = filter(Dnew, Split=="Test") %>% select(-Split)
+
+model3f <- function(data) {
+  mod = lm(profit_in_million ~ popularity + runtime + vote_count + num_genres + num_countries, data = data)
+  return(mod)
+}
+
+model33f <- function(data) {
+  mod = lm(profit_in_million ~ popularity + runtime + vote_average + vote_count + num_genres + num_countries, data = data)
+  return(mod)
+}
+
+model333f <- function(data) {
+  mod = lm(profit_in_million ~ popularity + runtime + vote_count + num_genres + num_companies + num_countries, data = data)
+  return(mod)
+}
+
+TESTT <- TEST %>%
+  gather_predictions(model3f(TRAIN), model33f(TRAIN), model333f(TRAIN)) %>%
+  mutate(resid = profit_in_million - pred,
+         relative_error = abs(resid/profit_in_million))
+
+TESTT$group <- factor(TESTT$group, levels=c("Bad Prediction", "Somewhat Bad Prediction", "Somewhat Good Prediction", "Good Prediction"))
+
+TESTT$model[TESTT$model == "model3f(TRAIN)"] <- "Best Model 1 with five predictors"
+TESTT$model[TESTT$model == "model33f(TRAIN)"] <- "Best Model 2 with six predictors"
+TESTT$model[TESTT$model == "model333f(TRAIN)"] <- "Best Model 3 with six predictors"
+
+TESTT %>% ggplot(aes(group, model, color=group)) +
+  geom_jitter(aes(size=relative_error)) +
+  theme_minimal() +
+  scale_color_manual(values = c(
+        "Good Prediction" = "deepskyblue4",
+        "Somewhat Good Prediction" = "deepskyblue3",
+        "Somewhat Bad Prediction" = "darkseagreen3",
+        "Bad Prediction" = "darkseagreen4")) +
+  labs(x="Prediction Level", y="Model", color="Prediction Level", size="Relative Error", title="Prediction Result of Three Best Logistic Model Using 'TRAIN AND TEST METHOD'") +
+  theme(plot.title=element_text(hjust=0.5))
+```
+
+According to the first figure, it shows that the majority of our predictions are "good."
+
+According to the second figure, we can see that the models' predictions are mostly good. 
+
+With these verified models, we can now use it to choose the highest predicted profitable movie out of a data set. 
+
+The movies our studio has to decide between producing is "Joker", "Jumanji: The Next Level", and "Knives Out." We get the information for these movies from [TMDB](https://www.themoviedb.org/?language=en-US). The popularity and the number of keywords in the original data set are controlled by the author himself/herself/themselves. Therefore, we exclude these two variables when looking to find the best models using the same method as before. Our ending results leave us with:
+
+- **Best model over the 'PROFIT > 100M' dataset:**
+
+model1: profit_in_million = vote_count + in_collection + num_genres + age_days + num_countries
+
+- **Best model over the 'PROFIT > 100M & English-original-language and in-collection PART' dataset:**
+
+model2: profit_in_million = runtime + vote_count + num_genres + num_countries
+
+- **Best model over the 'PROFIT > 100M & English-original-language and out-of-collection PART' dataset:**
+
+model3: profit_in_million = vote_count + num_genres + age_days + num_companies
+
+```{r}
+D6 <- D6 %>% select(-c(popularity, num_keywords))
+
+D7 <- D6 %>% filter(profit_in_million>=100)
+
+D8 <- D7 %>% filter(in_collection==TRUE & english==TRUE) %>% select(-c(in_collection, english, title_consistent, title_consistent))
+
+D9 <- D7 %>% filter(in_collection==FALSE & english==TRUE) %>% select(-c(in_collection, english, title_consistent, title_consistent))
+
+# ----------
+
+X <- select(D7, -profit_in_million)
+profit_in_million <- D7$profit_in_million
+Xy = data.frame(X, profit_in_million)
+bglm.AIC = bestglm(Xy, IC = "AIC", TopModels = 3, method = "exhaustive")
+
+X <- select(D8, -profit_in_million)
+profit_in_million <- D8$profit_in_million
+Xy = data.frame(X, profit_in_million)
+bglm.AIC = bestglm(Xy, IC = "AIC", TopModels = 3, method = "exhaustive")
+
+X <- select(D9, -profit_in_million)
+profit_in_million <- D9$profit_in_million
+Xy = data.frame(X, profit_in_million)
+bglm.AIC = bestglm(Xy, IC = "AIC", TopModels = 3, method = "exhaustive")
+
+model1 <- lm(profit_in_million ~ vote_count + in_collection + num_genres + age_days + num_countries, data=D7)
+model2 <- lm(profit_in_million ~ runtime + vote_count + num_genres + num_countries, data=D8)
+model3 <- lm(profit_in_million ~ vote_count + num_genres + age_days + num_companies, data=D9)
+
+# ----------
+
+# Jokers (2019): num_countries = 1; runtime = 122; vote_count = 20404; in_collection = FALSE; num_genres = 4; num_companies = 5
+# Budget = $55,000,000 = $55 million; Revenue = $1,074,251,311 = $1074.251311 million;
+
+Joker <- data.frame(title = "Joker (2019)", profit_in_million=1074.251311-55, vote_count=20404, in_collection=as.factor(FALSE), num_genres=4, num_countries=1, age_days=as.numeric(Sys.Date() - as.Date("04/10/2009","%d/%m/%Y")), num_companies=5, english=as.factor(TRUE), runtime=122)
+
+Joker_lm1 <- Joker %>%
+  mutate(prediction = predict(model1, newdata=.),
+         residual = .$profit_in_million - prediction)
+
+Joker_lm2 <- Joker %>%
+  mutate(prediction = predict(model3, newdata=.),
+         residual = .$profit_in_million - prediction)
+
+# ----------
+
+# Jumanji: The Next Level (2019): num_countries = 1; runtime = 123; vote_count = 6872; in_collection = TRUE; num_genres = 3; num_companies = 4
+# Budget = $125,000,000 = $125 million; Revenue = $800,059,707 = $800.059707 million
+
+Jumanji <- data.frame(title = "Jumanji: The Next Level (2019)", profit_in_million=800.059707-125, vote_count=6872, in_collection=as.factor(TRUE), num_genres=3, num_countries=1, age_days=as.numeric(Sys.Date() - as.Date("20/12/2017","%d/%m/%Y")), num_companies=4, english=as.factor(TRUE), runtime=123)
+
+Jumanji_lm1 <- Jumanji %>%
+  mutate(prediction = predict(model1, newdata=.),
+         residual = .$profit_in_million - prediction)
+
+Jumanji_lm2 <- Jumanji %>%
+  mutate(prediction = predict(model2, newdata=.),
+         residual = .$profit_in_million - prediction)
+
+# ----------
+
+# Knives Out (2019): num_countries = 1; runtime = 131; vote_count = 8,714; in_collection = FALSE; num_genres = 3; num_companies = 3
+# Budget = $40,000,000 = $40 million, Revenue = $309,232,797 = $309.232797 million
+
+Knives <- data.frame(title = "Knives Out (2019)", profit_in_million=309.232797-40, vote_count=8714, in_collection=as.factor(FALSE), num_genres=3, num_countries=1, age_days=as.numeric(Sys.Date() - as.Date("20/12/2017","%d/%m/%Y")), num_companies=3, english=as.factor(TRUE), runtime=131)
+
+Knives_lm1 <- Knives %>%
+  mutate(prediction = predict(model1, newdata=.),
+         residual = .$profit_in_million - prediction)
+
+Knives_lm2 <- Knives %>%
+  mutate(prediction = predict(model3, newdata=.),
+         residual = .$profit_in_million - prediction)
+
+Movie <- c("Joker (2019)", "Joker (2019)", "Jumanji: The Next Level (2019)", "Jumanji: The Next Level (2019)", "Knives Out (2019)", "Knives Out (2019)")
+Model <- c("model1", "model3", "model1", "model2", "model1", "model3")
+`Actual Profit in million` <- round(c(Joker$profit_in_million, Joker$profit_in_million, Jumanji$profit_in_million, Jumanji$profit_in_million, Knives$profit_in_million, Knives$profit_in_million), 4)
+`Predicted Profit in million` <- round(c(Joker_lm1$prediction, Joker_lm2$prediction, Jumanji_lm1$prediction, Jumanji_lm2$prediction, Knives_lm1$prediction, Knives_lm2$prediction), 4)
+`Residual` <- round(c(Joker_lm1$residual, Joker_lm2$residual, Jumanji_lm1$residual, Jumanji_lm2$residual, Knives_lm1$residual, Knives_lm2$residual), 4)
+`Relative Error = Absolute Value of Residual/Actual Profit in million` <- abs(round(c(Joker_lm1$residual/Joker$profit_in_million, Joker_lm2$residual/Joker$profit_in_million, Jumanji_lm1$residual/Jumanji$profit_in_million, Jumanji_lm2$residual/Jumanji$profit_in_million, Knives_lm1$residual/Knives$profit_in_million, Knives_lm2$residual/Knives$profit_in_million), 4))
+
+matrix.movies <- cbind(Movie, Model, `Actual Profit in million`, `Predicted Profit in million`, `Residual`, `Relative Error = Absolute Value of Residual/Actual Profit in million`)
+matrix.movies %>% kbl(booktabs=T, caption = "<center><strong>Using models to Predict out data movie</strong></center>", escape = FALSE, format = "html") %>% kable_styling() %>%
+  column_spec(6, bold=T, color=ifelse(abs(as.numeric(matrix.movies[1:6, 6]))<=0.5, "black", "red")) %>%
+  row_spec(c(2, 4), bold=T, color="white", background="green") %>%
+  row_spec(0, background="#D3D3D3") %>%
+  column_spec(c(5, 6), bold=T) %>%
+  add_footnote(c("model1: profit_in_million = vote_count + in_collection + num_genres + age_days + num_countries", "model2: profit_in_million = runtime + vote_count + num_genres + num_countries", "model3: profit_in_million = vote_count + num_genres + age_days + num_companies"), notation="number")
+```
+
+We use these models to predict the three expected profits from each of our movies. The relative_errors are shown in the table above and we get varying results. For "Joker" and "Jumanji", we nearly make the perfect prediction, seeing the extremely small relative_errors. However, when looking at the "Knives Out" movie, it seems that we make a disastrous prediction, seeing an extremely large relative_error. Therefore, we cannot say our models are perfect in predicting profits. A better model has a need for more complexity and/or different variables.
+
+### Result 2:
+
+Another important decision that movie studios have to make is whether or not to expand a franchise by producing a sequel, or many sequels, to a movie. We want to supplement this decision with some data about how the collections of movies in our data set performed over time, which can help us make decisions about whether or not to produce a sequel, as well as what the ideal number of sequels would be and how long we should wait between installments. If sequels tend to be less profitable the more we produce, then it makes more financial sense to focus on making movies that aren’t part of a franchise.
+
+The following two figures show how the profit changes for a sequel movie over seasons (over time), which can help us to have a sense between the relationship of "whether to produce a sequel" and "the profit of this season".
+
+```{r, fig.width=12, fig.height=8}
+FC %>% filter(count==4) %>%
+  ggplot(., aes(x=year, y=profit_in_million, color=belongs_to_collection)) +
+  geom_point(size=2) + geom_line(size=0.5) + theme_minimal() +
+  labs(x="Year", y="Profit in million", color="Collection", title="The profit change of movies which have four seasons over year/seasons")
+
+FC %>% filter(count==5) %>%
+  ggplot(., aes(x=year, y=profit_in_million, color=belongs_to_collection)) +
+  geom_point(size=2) + geom_line(size=0.5) + theme_minimal() +
+  labs(x="Year", y="Profit in million", color="Collection", title="The profit change of movies which have five seasons over year/seasons")
+```
+
+We also wanted to determine how profits are affected by the number of movies in the franchise and how long it’s been since the most recent movie was made. To do this, we filtered the data set based on what number each movie is in the franchise. The original movies are only considered in order to provide a comparison for the second movie in the franchise, since we want to focus primarily on sequels for this question. The second movie released in each collection is considered to be the first sequel, and is labeled as sequel number 1 in the collection, then the second sequel in the collection is sequel number 2, and so on. For each sequel number, we plotted the change in profits from the previous movie to this one against the number of days since the previous movie in the collection was released. We also included a trendline to show whether or not the amount of time between movies made a difference. This was all compiled into an animated scatter plot to show how each collection moved over time. 
+
+```{r, fig.width=12, fig.height=8,fig.cap="Change in profits for movies in collections based on order of movies",fig.align='center'}
+nth_sequel = function(num) {
+  collections = D1 %>% filter(in_collection == TRUE) %>% group_by(belongs_to_collection) %>% dplyr::summarise(n = n()) %>% filter(n>num)
+  changes = D1 %>% filter(belongs_to_collection %in% collections$belongs_to_collection) %>% arrange(desc(age_days)) %>% group_by(belongs_to_collection) %>% dplyr::summarise(change = dplyr::nth(profit_in_million, (num + 1)) - dplyr::nth(profit_in_million, num), dist = dplyr::nth(age_days, num) - dplyr::nth(age_days, (num + 1)), sequel_num = as.factor(num), budget = dplyr::nth(budget_in_million, (num + 1))) %>% arrange(change)
+  return(changes)
+}
+
+sequel_data = nth_sequel(1)
+
+for (i in 2:6) {
+  sequel_data = rbind(sequel_data, nth_sequel(i))
+}
+
+p = ggplot(sequel_data, aes(dist, change)) + 
+  geom_point(aes(color=budget)) + 
+  geom_smooth(method="lm", se=F) +
+  scale_x_continuous(trans = scales::sqrt_trans()) + 
+  theme_minimal()
+
+p + 
+  labs(title = 'Sequel number: {closest_state}', x = 'Days since previous movie', y = 'Change in profits (millions of dollars)') +
+  transition_states(sequel_num, transition_length = 2, state_length = 8) + 
+  enter_fade() +
+  exit_fade()
+```
+
+The data seems to show a couple important details, although the relatively small sample size for collections of more than 4 movies makes it hard to pull any significant conclusions from the data. The first trend to notice is that the first couple sequels in each collection tend to have very variable results in terms of being more or less profitable than the movie before them. They also don’t seem to show much of a trend in terms of the time between movies, indicating that it might still make sense to produce a sequel to a movie that came out a long time ago. However, collections that contained a higher number of movies seem to consistently get higher profits, likely because they have established a committed fanbase and can generate much more excitement from the same amount of marketing.
+
+# CONCLUSION
+
+In our analysis, we focused on two questions that were relevant to our data and purposeful for the film industry. First, we tried to create appropriate models to assess whether we could predict profitability for films outside our dataset. After going through the process of using different modeling techniques and choosing significant predictors, we discovered that our “training” models predicted profitability closely with the fitted values. With models using either the whole dataset or limited amounts of it based on high profitability, we were able to make 2 successful predictions on “test” movies of our choosing and 1 unsuccessful prediction, using data from the official TMDB website. Since all of our original dataset’s ratings and other important predictor values were directly taken from TMDB, we decided to keep it consistent and get our test movies' predictor values from there as well. Throughout our time working with this data, we found that we likely were unable to predict profitability from a large array of variables. Profitability is largely dependent on the multiple characteristics of a film, but our model selection guided us to conclude that less than half the amount of our predictor list was appropriate to create our models.
+
+The second question of this analysis attempted to build on our conclusions from the primary question by asking: If a given movie is profitable, will the sequel and following installments of the collection be increasingly profitable? In order to analyze this question, we began by laying out the most profitable movie collections and tracking each installment’s respective profit in comparison to previous ones. Another important consideration of this analysis surrounded the disparity between each successive sequel’s profit. When viewed through the lens of a movie studio, both elements of this initial question are important in determining the future of a potential movie franchise and the potential revenue associated. While the findings presented in the results were important to consider, they would be more conclusive if a larger sample of movie collections existed at the time that this data was collected.
+
+Ultimately, we need to connect how the results to our questions are relevant to the broader world and consumers. For film studios, profits are more often than not a direct determinant in deciding to pursue another film in the same series. Ask yourself this, would you as a film studio executive want to invest in a sequel when your film made little to zero profits? Probably not, but if you did it would not make financial sense. Secondly, as much as film studios can benefit from achievements, critical praise, and other metrics, the ability to model and predict profits is something useful we created as an aid in decision-making among studios. Our findings also allow passionate filmgoers to have a tool to keep up with current box office trends and the overall state of the film industry. When we think of films, many think of going to the movie theater but the landscape of “going to the box office” has shifted. One important element of the film industry post-COVID is that many films have been released on streaming services to subscribers at no or some extra costs, while some studios have decided to have a limited release or a combination of both. Since our dataset includes films up until 2017, we were unable to account for the effects of the pandemic but those who find the data relevant might try to expand on our existing model to get a more accurate picture of the future. Possibilities include adding information for films that were released during or after the covid pandemic and incorporating how wide a film’s release is, as in the number of theaters that showed this particular film. Whether it is profitability or determining the future of a film series, this data gives us better confidence to make those decisions.
+
+Extending this analysis out into the future, it is important to consider additional external factors in the movie industry that the analyzed data set did not encompass. The first element to consider is the impact of the COVID pandemic on the movie industry as noted above. 2020 saw a significant downturn in movie releases as studios postponed releases and looked elsewhere for sources of revenue such as streaming services. The latter half of 2021 began a rebound for this industry since the pandemic but there should be considerable concerns regarding if movies will be released at the increasing rate that they were during the 2010s. Another factor to consider is the effect of the growing streaming service side of entertainment which prominent studios have begun to sink time and costs into since the onset of the pandemic. With it now being easier than ever to stream a movie from the comfort of your home, it is likely that many movies not bound for box office success find their way to streaming platforms. Going forward for future analyses, it will be imperative that movie studios appropriately account for effects such as these when evaluating beginning production on individual movies and when creating successive installments of existing franchises.
+
+
+
+
+
+
+
+
+
