@@ -1,4 +1,4 @@
-# STOR320-Movies-Profit-Prediction-Project
+# Movies Profit Prediction
 
 Project on predicting movies profit with data from kaggle: https://www.kaggle.com/datasets/rounakbanik/the-movies-dataset
 
